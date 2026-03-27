@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 
 # Copyright 2020 Stefan Prodan. All rights reserved.
 #
@@ -14,8 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -o errexit
-set -o pipefail
+set -e
+
+git config --global --add safe.directory /github/workspace
 
 GITHUB_TOKEN=$1
 CHARTS_DIR=$2
@@ -34,61 +35,61 @@ INDEX_DIR=${14}
 ENTERPRISE_URL=${15}
 DEPENDENCIES=${16}
 
-CHARTS=()
+CHARTS=""
 CHARTS_TMP_DIR=$(mktemp -d)
 REPO_ROOT=$(git rev-parse --show-toplevel)
 REPO_URL=""
 
 main() {
-  if [[ -z "$HELM_VERSION" ]]; then
+  if [ -z "$HELM_VERSION" ]; then
       HELM_VERSION="3.10.0"
   fi
 
-  if [[ -z "$CHARTS_DIR" ]]; then
+  if [ -z "$CHARTS_DIR" ]; then
       CHARTS_DIR="charts"
   fi
 
-  if [[ -z "$OWNER" ]]; then
-      OWNER=$(cut -d '/' -f 1 <<< "$GITHUB_REPOSITORY")
+  if [ -z "$OWNER" ]; then
+      OWNER=$(echo "$GITHUB_REPOSITORY" | cut -d '/' -f 1)
   fi
 
-  if [[ -z "$REPOSITORY" ]]; then
-      REPOSITORY=$(cut -d '/' -f 2 <<< "$GITHUB_REPOSITORY")
+  if [ -z "$REPOSITORY" ]; then
+      REPOSITORY=$(echo "$GITHUB_REPOSITORY" | cut -d '/' -f 2)
   fi
 
-  if [[ -z "$BRANCH" ]]; then
+  if [ -z "$BRANCH" ]; then
       BRANCH="gh-pages"
   fi
 
-  if [[ -z "$TARGET_DIR" ]]; then
+  if [ -z "$TARGET_DIR" ]; then
     TARGET_DIR="."
   fi
 
-  if [[ -z "$CHARTS_URL" ]]; then
+  if [ -z "$CHARTS_URL" ]; then
       CHARTS_URL="https://${OWNER}.github.io/${REPOSITORY}"
   fi
 
-  if [[ "$TARGET_DIR" != "." && "$TARGET_DIR" != "docs" ]]; then
+  if [ "$TARGET_DIR" != "." ] && [ "$TARGET_DIR" != "docs" ]; then
     CHARTS_URL="${CHARTS_URL}/${TARGET_DIR}"
   fi
 
-  if [[ -z "$REPO_URL" ]]; then
-      if [[ -z "$ENTERPRISE_URL" ]]; then
+  if [ -z "$REPO_URL" ]; then
+      if [ -z "$ENTERPRISE_URL" ]; then
           REPO_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${OWNER}/${REPOSITORY}"
       else
           REPO_URL="https://x-access-token:${GITHUB_TOKEN}@${ENTERPRISE_URL}/${REPOSITORY}"
       fi
   fi
 
-  if [[ -z "$COMMIT_USERNAME" ]]; then
+  if [ -z "$COMMIT_USERNAME" ]; then
       COMMIT_USERNAME="${GITHUB_ACTOR}"
   fi
 
-  if [[ -z "$COMMIT_EMAIL" ]]; then
+  if [ -z "$COMMIT_EMAIL" ]; then
       COMMIT_EMAIL="${GITHUB_ACTOR}@users.noreply.github.com"
   fi
 
-  if [[ -z "$INDEX_DIR" ]]; then
+  if [ -z "$INDEX_DIR" ]; then
       INDEX_DIR=${TARGET_DIR}
   fi
 
@@ -96,7 +97,7 @@ main() {
   download
   get_dependencies
   dependencies
-  if [[ "$LINTING" != "off" ]]; then
+  if [ "$LINTING" != "off" ]; then
     lint
   fi
   package
@@ -105,8 +106,8 @@ main() {
 
 locate() {
   for dir in $(find "${CHARTS_DIR}" -type d -mindepth 1 -maxdepth 1); do
-    if [[ -f "${dir}/Chart.yaml" ]]; then
-      CHARTS+=("${dir}")
+    if [ -f "${dir}/Chart.yaml" ]; then
+      CHARTS="${CHARTS} ${dir}"
       echo "Found chart directory ${dir}"
     else
       echo "Ignoring non-chart directory ${dir}"
@@ -117,58 +118,61 @@ locate() {
 download() {
   tmpDir=$(mktemp -d)
 
-  pushd $tmpDir >& /dev/null
+  cd "$tmpDir"
 
   curl -sSL https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz | tar xz
   cp linux-amd64/helm /usr/local/bin/helm
 
-  popd >& /dev/null
-  rm -rf $tmpDir
+  cd -
+  rm -rf "$tmpDir"
 }
 
 get_dependencies() {
-  IFS=';' read -ra dependency <<< "$DEPENDENCIES"
-  for repos in ${dependency[@]}; do
-    result=$( echo $repos|awk -F',' '{print NF}' )
-    if [[ $result -gt 2 ]]; then
-      name=$(cut -f 1 -d, <<< "$repos")
-      username=$(cut -f 2 -d, <<< "$repos")
-      password=$(cut -f 3 -d, <<< "$repos")
-      url=$(cut -f 4 -d, <<< "$repos")
+  OLD_IFS="$IFS"
+  IFS=';'
+  for repos in $DEPENDENCIES; do
+    IFS="$OLD_IFS"
+    result=$(echo "$repos" | awk -F',' '{print NF}')
+    if [ "$result" -gt 2 ]; then
+      name=$(echo "$repos" | cut -f 1 -d,)
+      username=$(echo "$repos" | cut -f 2 -d,)
+      password=$(echo "$repos" | cut -f 3 -d,)
+      url=$(echo "$repos" | cut -f 4 -d,)
       helm repo add ${name} --username ${username} --password ${password} ${url}
     else
-      name=$(cut -f 1 -d, <<< "$repos")
-      url=$(cut -f 2 -d, <<< "$repos")
+      name=$(echo "$repos" | cut -f 1 -d,)
+      url=$(echo "$repos" | cut -f 2 -d,)
       helm repo add ${name} ${url}
     fi
   done
+  IFS="$OLD_IFS"
 }
 
 dependencies() {
-  for chart in ${CHARTS[@]}; do
+  for chart in ${CHARTS}; do
     helm dependency update "${chart}"
   done
 }
 
 lint() {
-  helm lint ${CHARTS[*]}
+  helm lint ${CHARTS}
 }
 
 package() {
-  if [[ ! -z "$APP_VERSION" ]]; then
+  if [ -n "$APP_VERSION" ]; then
       APP_VERSION_CMD=" --app-version $APP_VERSION"
   fi
 
-  if [[ ! -z "$CHART_VERSION" ]]; then
+  if [ -n "$CHART_VERSION" ]; then
       CHART_VERSION_CMD=" --version $CHART_VERSION"
   fi
 
-  helm package ${CHARTS[*]} --destination ${CHARTS_TMP_DIR} $APP_VERSION_CMD$CHART_VERSION_CMD
+  helm package ${CHARTS} --destination ${CHARTS_TMP_DIR} $APP_VERSION_CMD$CHART_VERSION_CMD
 }
 
 upload() {
   tmpDir=$(mktemp -d)
-  pushd $tmpDir >& /dev/null
+  cd "$tmpDir"
 
   git clone ${REPO_URL}
   cd ${REPOSITORY}
@@ -182,7 +186,7 @@ upload() {
   mkdir -p ${INDEX_DIR}
   mkdir -p ${TARGET_DIR}
 
-  if [[ -f "${INDEX_DIR}/index.yaml" ]]; then
+  if [ -f "${INDEX_DIR}/index.yaml" ]; then
     echo "Found index, merging changes"
     helm repo index ${CHARTS_TMP_DIR} --url ${CHARTS_URL} --merge "${INDEX_DIR}/index.yaml"
     mv -f ${CHARTS_TMP_DIR}/*.tgz ${TARGET_DIR}
@@ -200,8 +204,8 @@ upload() {
   git commit -m "Publish $charts"
   git push origin ${BRANCH}
 
-  popd >& /dev/null
-  rm -rf $tmpDir
+  cd /
+  rm -rf "$tmpDir"
 }
 
 main
